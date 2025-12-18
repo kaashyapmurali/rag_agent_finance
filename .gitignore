@@ -1,0 +1,16 @@
+# --- Python Environment ---
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- uv specific ---
+.uv/
+
+# --- Environment Variables (Secrets) ---
+.env
+.env.local
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints
+*.ipynb
