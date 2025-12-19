@@ -1,5 +1,7 @@
 # --- Python Environment ---
 .venv/
+data/
+vector_store/
 __pycache__/
 *.py[cod]
 *$py.class
