@@ -32,7 +32,7 @@ class FinancialAgent:
             persist_directory=self.INDEX_DIR_PATH # persist data locally
         )
 
-    def download_and_save_data(self, num_samples=10, overwrite=False):
+    def download_and_save_data(self, num_samples=None, overwrite=False):
         self.RAW_DATA_FILE_PATH = os.path.join(self.DATA_DIR_PATH, "earnings_transcripts.jsonl")
         if os.path.exists(self.RAW_DATA_FILE_PATH):
             if not overwrite:
@@ -74,7 +74,32 @@ class FinancialAgent:
                     print(f"Processed {count} records...")
         print("Download complete!")
 
-    def create_chunks_and_save_vector_db(self, batch_size=100, test=False, n_samples_test=10):
+    def _get_existing_signatures(self):
+            """
+            Fetches all unique (ticker, year, quarter) tuples currently in the DB.
+            Returns a Python Set for O(1) lookups.
+            """
+            print("Fetching existing document signatures from DB...")
+            # We only need metadata, not embeddings or documents
+            # Note: If your DB is HUGE (millions), you might paginate this. 
+            # For 100k-500k, fetching all metadatas is usually fine in memory.
+            result = self.vector_store.get(include=["metadatas"])
+            
+            existing_signatures = set()
+            for meta in result['metadatas']:
+                # Create a unique signature tuple
+                # We use 'UNKNOWN' fallback to match your ingestion logic
+                sig = (
+                    meta.get('ticker') or 'UNKNOWN',
+                    int(meta.get('year') or 0),
+                    meta.get('quarter') or 'UNKNOWN'
+                )
+                existing_signatures.add(sig)
+                
+            print(f"Cache built: Found {len(existing_signatures)} unique chunks (representing fewer actual documents).")
+            return existing_signatures
+
+    def create_chunks_and_save_vector_db(self, ticker='AAPL', batch_size=100, test=False, n_samples_test=10):
         batch_docs = []
         new_docs_count = 0
         skipped_count = 0
@@ -83,11 +108,15 @@ class FinancialAgent:
             chunk_overlap=200,
             separators=["\n\n", "\n", " ", ""]
         )
+        existing_signatures = self._get_existing_signatures()
+
         start_time = time.time()
         with open(self.RAW_DATA_FILE_PATH, "r") as f:
             for line in f:
                 # 1. Read entry and transcripts
                 row = json.loads(line)
+                if ticker and row['ticker'] != ticker:
+                    continue
                 metadata = {
                     "ticker": row.get('ticker') or 'UNKNOWN',
                     "year": int(row['year']) if row['year'] else 0,
@@ -96,19 +125,10 @@ class FinancialAgent:
                     "industry": row.get('industry') or 'UNKNOWN'
                 }
                 # 2. Check if it exists in the vector store, skip if yes
-                existing_data = self.vector_store.get(
-                                    where={
-                                        "$and": [
-                                            {"ticker": {"$eq": metadata['ticker']}},
-                                            {"year": {"$eq": metadata['year']}},
-                                            {"quarter": {"$eq": metadata['quarter']}}
-                                        ]
-                                    },
-                                    limit=1 
-                )
-                if len(existing_data['ids']) > 0:
-                    # print(f"Skipping {metadata['ticker']} {metadata['year']} {metadata['quarter']} - Already indexed.")
+                if (metadata['ticker'], metadata['year'], metadata['quarter']) in existing_signatures:
                     skipped_count += 1
+                    if skipped_count % 100 == 0:
+                        print(f"Skipped {skipped_count} existing reports so far...")
                     continue
                 # 3. Add the doc to the vector store
                 chunks = text_splitter.split_text(row['transcript'])
@@ -133,8 +153,10 @@ class FinancialAgent:
 if __name__ == "__main__":
     # set parameters
     test = False
+    overwrite = False
 
-    agent = FinancialAgent()
-    agent.download_and_save_data(num_samples=None, overwrite=test)
-    agent.create_chunks_and_save_vector_db(test=test, n_samples_test=10)
+    # agent = FinancialAgent()
+    agent = FinancialAgent(collection_name='earnings_call_AAPL')
+    agent.download_and_save_data(num_samples=None, overwrite=overwrite)
+    agent.create_chunks_and_save_vector_db(ticker='AAPL', test=test, batch_size=70, n_samples_test=2000)
     print("Done!")
