@@ -1,6 +1,7 @@
 import pandas as pd
 import json
 import os
+import time
 from datasets import load_dataset
 from dotenv import load_dotenv
 
@@ -73,7 +74,8 @@ class FinancialAgent:
                     print(f"Processed {count} records...")
         print("Download complete!")
 
-    def create_chunks_and_save_vector_db(self, test=False, n_samples_test=10):
+    def create_chunks_and_save_vector_db(self, batch_size=100, test=False, n_samples_test=10):
+        batch_docs = []
         new_docs_count = 0
         skipped_count = 0
         text_splitter = RecursiveCharacterTextSplitter(
@@ -81,16 +83,17 @@ class FinancialAgent:
             chunk_overlap=200,
             separators=["\n\n", "\n", " ", ""]
         )
+        start_time = time.time()
         with open(self.RAW_DATA_FILE_PATH, "r") as f:
             for line in f:
                 # 1. Read entry and transcripts
                 row = json.loads(line)
                 metadata = {
-                    "ticker": row['ticker'],
+                    "ticker": row.get('ticker') or 'UNKNOWN',
                     "year": int(row['year']) if row['year'] else 0,
-                    "quarter": row['quarter'],
-                    "sector": row['sector'],
-                    "industry": row['industry']
+                    "quarter": row.get('quarter') or 'UNKNOWN',
+                    "sector": row.get('sector') or 'UNKNOWN',
+                    "industry": row.get('industry') or 'UNKNOWN'
                 }
                 # 2. Check if it exists in the vector store, skip if yes
                 existing_data = self.vector_store.get(
@@ -109,19 +112,22 @@ class FinancialAgent:
                     continue
                 # 3. Add the doc to the vector store
                 chunks = text_splitter.split_text(row['transcript'])
-                batch_docs = []
+                
                 for chunk in chunks:
                     batch_docs.append(Document(page_content=chunk, metadata=metadata))
-                if batch_docs:
+                if len(batch_docs) >= batch_size or (test and new_docs_count == n_samples_test):
                     self.vector_store.add_documents(batch_docs)
-                    new_docs_count += 1
-
-                if (new_docs_count)% 1000 == 0:
-                    print(f"Added {new_docs_count} chunks. Skipped so far: {skipped_count}")
+                    new_docs_count += len(batch_docs)
+                    print(f"Flushed {len(batch_docs)} chunks. Total Added: {new_docs_count}. Skipped so far: {skipped_count}. (Time elapsed: {time.time() - start_time:.2f}s)")
+                    batch_docs = []
 
                 # 4. Test function to break out of the loop if more than 
-                if test and new_docs_count == n_samples_test:
+                if test and new_docs_count >= n_samples_test:
                     break
+        if batch_docs:
+            self.vector_store.add_documents(batch_docs)
+            new_docs_count += len(batch_docs)
+            print(f"Flushing remaing {len(batch_docs)} chunks.")
         print(f"Processed {new_docs_count + skipped_count} chunks. Total Skipped: {skipped_count}, Total New: {new_docs_count}")
 
 if __name__ == "__main__":
